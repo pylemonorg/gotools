@@ -15,6 +15,7 @@ go get github.com/pylemonorg/gotools@latest
 | **logger** | `gotools/logger` | 基于 zerolog 的日志库，支持彩色控制台 / JSON 输出 / 文件写入 |
 | **db** | `gotools/db` | Redis 和 PostgreSQL 客户端封装，支持重连、重试、批量插入 |
 | **obsutil** | `gotools/obsutil` | 华为云 OBS 对象存储客户端封装，支持上传/下载/分段上传/流式上传/分布式锁 |
+| **monitor** | `gotools/monitor` | 进程资源监控（CPU/内存/Goroutine），支持定时采样、汇总统计、持久化 |
 | **jsonutil** | `gotools/jsonutil` | JSON 序列化/反序列化、文件读写、类型安全取值 |
 | **hashutil** | `gotools/hashutil` | MD5、SHA-256、xxhash 分桶、随机字符串 |
 | **strutil** | `gotools/strutil` | 字符串处理（Strip）、Base64 编解码 |
