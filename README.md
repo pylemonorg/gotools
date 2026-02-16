@@ -83,18 +83,11 @@ git push origin --tags
 
 ### 删除版本
 
-**步骤 1**：在 GitHub 仓库页面 → Releases → 找到对应版本 → 删除 Release。
-
-**步骤 2**：删除本地 Tag。
+删除本地和远程 Tag 即可，GitHub Release 会自动清理。
 
 ```bash
-git tag -d v0.1.1
-```
-
-**步骤 3**：删除远程 Tag。
-
-```bash
-git push origin --delete v0.1.1
+git tag -d v0.1.1              # 删除本地 Tag
+git push origin --delete v0.1.1 # 删除远程 Tag
 ```
 
 ## License
