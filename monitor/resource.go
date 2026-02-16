@@ -12,53 +12,6 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// ResourceStats 单次资源采样数据。
-type ResourceStats struct {
-	CPUPercent    float64   // CPU 使用率（百分比，多核场景可能 >100%）
-	MemoryRSS     uint64    // 常驻内存（字节）
-	MemoryVMS     uint64    // 虚拟内存（字节）
-	MemoryPercent float32   // 内存使用率（百分比）
-	NumGoroutines int       // Goroutine 数量
-	NumGC         uint32    // GC 累计次数
-	HeapAlloc     uint64    // 堆已分配内存（字节）
-	HeapSys       uint64    // 堆系统内存（字节）
-	Timestamp     time.Time // 采样时间
-}
-
-// FormatStats 将采样数据格式化为一行摘要字符串。
-func (s *ResourceStats) FormatStats() string {
-	return fmt.Sprintf("CPU=%.1f%%, 内存=%s(%.1f%%), Goroutines=%d, GC=%d",
-		s.CPUPercent, FormatBytes(s.MemoryRSS), s.MemoryPercent, s.NumGoroutines, s.NumGC)
-}
-
-// ResourceSummary 一段时间内的资源使用汇总。
-type ResourceSummary struct {
-	SampleCount  int     `json:"sample_count"`
-	CPUMin       float64 `json:"cpu_min"`
-	CPUMax       float64 `json:"cpu_max"`
-	CPUAvg       float64 `json:"cpu_avg"`
-	MemoryMin    uint64  `json:"memory_min"`
-	MemoryMax    uint64  `json:"memory_max"`
-	MemoryAvg    uint64  `json:"memory_avg"`
-	GoroutineMin int     `json:"goroutine_min"`
-	GoroutineMax int     `json:"goroutine_max"`
-	GoroutineAvg int     `json:"goroutine_avg"`
-}
-
-// SummarySaver 资源汇总持久化接口（可选）。
-// 由调用方实现（如保存到 Redis List），不设置则不持久化。
-type SummarySaver interface {
-	SaveSummary(key string, jsonValue string) error
-}
-
-// Config 监控器配置。
-type Config struct {
-	Interval        time.Duration                 // 采样间隔，默认 2s
-	LogInterval     time.Duration                 // 日志输出间隔，默认等于 Interval
-	OnStats         func(stats *ResourceStats)    // 采样回调（设置后不再输出默认日志）
-	GetSummarySaver func() (SummarySaver, string) // 返回 (saver, key)，停止时保存汇总
-}
-
 // ResourceMonitor 进程资源监控器，定时采样 CPU / 内存 / Goroutine 等指标。
 type ResourceMonitor struct {
 	proc        *process.Process
@@ -73,8 +26,9 @@ type ResourceMonitor struct {
 
 	onStats func(stats *ResourceStats)
 
-	saverMu         sync.Mutex
-	getSummarySaver func() (SummarySaver, string)
+	saverMu sync.Mutex
+	saver   SummarySaver
+	saveKey string
 
 	historyMu sync.Mutex
 	history   []ResourceStats
@@ -90,7 +44,8 @@ func NewResourceMonitor(cfg *Config) (*ResourceMonitor, error) {
 	interval := 2 * time.Second
 	logInterval := 2 * time.Second
 	var onStats func(stats *ResourceStats)
-	var getSummarySaver func() (SummarySaver, string)
+	var saver SummarySaver
+	var saveKey string
 
 	if cfg != nil {
 		if cfg.Interval > 0 {
@@ -101,39 +56,32 @@ func NewResourceMonitor(cfg *Config) (*ResourceMonitor, error) {
 			logInterval = cfg.LogInterval
 		}
 		onStats = cfg.OnStats
-		getSummarySaver = cfg.GetSummarySaver
+		saver = cfg.Saver
+		saveKey = cfg.SaveKey
 	}
 
 	return &ResourceMonitor{
-		proc:            p,
-		interval:        interval,
-		logInterval:     logInterval,
-		stopChan:        make(chan struct{}),
-		onStats:         onStats,
-		getSummarySaver: getSummarySaver,
-		numCPU:          runtime.NumCPU(),
-		history:         make([]ResourceStats, 0, 1000),
+		proc:        p,
+		interval:    interval,
+		logInterval: logInterval,
+		stopChan:    make(chan struct{}),
+		onStats:     onStats,
+		saver:       saver,
+		saveKey:     saveKey,
+		numCPU:      runtime.NumCPU(),
+		history:     make([]ResourceStats, 0, 1000),
 	}, nil
 }
 
-// SetSummarySaver 设置汇总持久化回调（可在启动后再设置）。
-func (m *ResourceMonitor) SetSummarySaver(getter func() (SummarySaver, string)) {
-	if getter == nil {
-		return
-	}
+// SetSaver 设置或更新汇总持久化方式（可在 Start 之后调用）。
+func (m *ResourceMonitor) SetSaver(saver SummarySaver, key string) {
 	m.saverMu.Lock()
 	defer m.saverMu.Unlock()
-	m.getSummarySaver = getter
+	m.saver = saver
+	m.saveKey = key
 }
 
-// SaveToRedis 便捷方法，设置将汇总保存到指定 key。
-func (m *ResourceMonitor) SaveToRedis(saver SummarySaver, key string) {
-	m.SetSummarySaver(func() (SummarySaver, string) {
-		return saver, key
-	})
-}
-
-// Start 启动异步监控。
+// Start 启动异步监控。每次启动会清空历史数据，确保汇总只包含本次运行的采样。
 func (m *ResourceMonitor) Start() {
 	m.mu.Lock()
 	if m.running {
@@ -142,6 +90,10 @@ func (m *ResourceMonitor) Start() {
 	}
 	m.running = true
 	m.mu.Unlock()
+
+	m.historyMu.Lock()
+	m.history = m.history[:0]
+	m.historyMu.Unlock()
 
 	m.wg.Add(1)
 	go m.loop()
@@ -156,16 +108,17 @@ func (m *ResourceMonitor) Stop() {
 		return
 	}
 	m.running = false
+	close(m.stopChan)
 	m.mu.Unlock()
 
-	close(m.stopChan)
 	m.wg.Wait()
 
-	m.printSummary()
+	m.logAndSaveSummary()
 	logger.Infof("monitor: 资源监控已停止")
 
-	// 重置 stopChan 以允许再次 Start
+	m.mu.Lock()
 	m.stopChan = make(chan struct{})
+	m.mu.Unlock()
 }
 
 // GetStats 同步获取当前资源快照。
@@ -177,13 +130,19 @@ func (m *ResourceMonitor) GetStats() (*ResourceStats, error) {
 
 	if cpu, err := m.proc.CPUPercent(); err == nil {
 		stats.CPUPercent = cpu
+	} else {
+		logger.Debugf("monitor: 获取 CPU 使用率失败: %v", err)
 	}
 	if mem, err := m.proc.MemoryInfo(); err == nil {
 		stats.MemoryRSS = mem.RSS
 		stats.MemoryVMS = mem.VMS
+	} else {
+		logger.Debugf("monitor: 获取内存信息失败: %v", err)
 	}
 	if pct, err := m.proc.MemoryPercent(); err == nil {
 		stats.MemoryPercent = pct
+	} else {
+		logger.Debugf("monitor: 获取内存百分比失败: %v", err)
 	}
 
 	var ms runtime.MemStats
@@ -195,7 +154,7 @@ func (m *ResourceMonitor) GetStats() (*ResourceStats, error) {
 	return stats, nil
 }
 
-// GetSummary 获取当前已采集数据的汇总。
+// GetSummary 获取当前已采集数据的汇总。无数据时返回 nil。
 func (m *ResourceMonitor) GetSummary() *ResourceSummary {
 	m.historyMu.Lock()
 	defer m.historyMu.Unlock()
@@ -272,11 +231,12 @@ func (m *ResourceMonitor) loop() {
 				continue
 			}
 
-			// 记录历史（上限 500000 条，超出时丢弃最早的 50000 条）
 			m.historyMu.Lock()
 			const maxHistory = 500000
+			const trimCount = 50000
 			if len(m.history) >= maxHistory {
-				m.history = m.history[50000:]
+				n := copy(m.history, m.history[trimCount:])
+				m.history = m.history[:n]
 			}
 			m.history = append(m.history, *stats)
 			m.historyMu.Unlock()
@@ -306,15 +266,8 @@ func (m *ResourceMonitor) logStats(stats *ResourceStats) {
 		stats.NumGoroutines, stats.NumGC)
 }
 
-// resourceSummaryRecord 持久化时的 JSON 结构。
-type resourceSummaryRecord struct {
-	NumCPU  int    `json:"num_cpu"`
-	EndedAt string `json:"ended_at"`
-	*ResourceSummary
-}
-
-// printSummary 输出汇总日志，并可选持久化。
-func (m *ResourceMonitor) printSummary() {
+// logAndSaveSummary 输出汇总日志，并在设置了 Saver 时持久化。
+func (m *ResourceMonitor) logAndSaveSummary() {
 	summary := m.GetSummary()
 	if summary == nil {
 		logger.Infof("monitor: 汇总 - 无采样数据")
@@ -331,23 +284,19 @@ func (m *ResourceMonitor) printSummary() {
 		summary.GoroutineMin, summary.GoroutineMax, summary.GoroutineAvg)
 	logger.Infof("monitor: ====================================")
 
-	// 可选持久化
+	// 持久化
 	m.saverMu.Lock()
-	getter := m.getSummarySaver
+	saver, key := m.saver, m.saveKey
 	m.saverMu.Unlock()
 
-	if getter == nil {
-		return
-	}
-	saver, key := getter()
 	if saver == nil || key == "" {
 		return
 	}
 
-	record := resourceSummaryRecord{
+	record := SummaryRecord{
 		NumCPU:          m.numCPU,
 		EndedAt:         time.Now().Format(time.RFC3339),
-		ResourceSummary: summary,
+		ResourceSummary: *summary,
 	}
 	jsonBytes, err := json.Marshal(record)
 	if err != nil {
@@ -359,27 +308,4 @@ func (m *ResourceMonitor) printSummary() {
 		return
 	}
 	logger.Infof("monitor: 汇总已保存到 [%s]", key)
-}
-
-// ---------------------------------------------------------------------------
-// 工具函数
-// ---------------------------------------------------------------------------
-
-// FormatBytes 将字节数格式化为人类可读的字符串（B / KB / MB / GB）。
-func FormatBytes(bytes uint64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-	)
-	switch {
-	case bytes >= GB:
-		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
-	case bytes >= MB:
-		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
-	case bytes >= KB:
-		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
 }

@@ -9,8 +9,7 @@ import "github.com/pylemonorg/gotools/monitor"
 ## 快速开始
 
 ```go
-// 使用默认配置（采样间隔 2s）
-mon, err := monitor.NewResourceMonitor(nil)
+mon, err := monitor.NewResourceMonitor(nil) // 默认配置，采样间隔 2s
 if err != nil {
     log.Fatal(err)
 }
@@ -28,8 +27,7 @@ mon, _ := monitor.NewResourceMonitor(&monitor.Config{
     Interval:    5 * time.Second,  // 采样间隔
     LogInterval: 10 * time.Second, // 日志输出间隔（不影响采样频率）
     OnStats: func(stats *monitor.ResourceStats) {
-        // 自定义采样回调（设置后不再输出默认日志）
-        fmt.Println(stats.FormatStats())
+        fmt.Println(stats.FormatStats()) // 自定义回调（设置后不再输出默认日志）
     },
 })
 ```
@@ -38,37 +36,28 @@ mon, _ := monitor.NewResourceMonitor(&monitor.Config{
 
 汇总数据通过 `RPUSH` 追加到 Redis List，每次保存为一条 JSON 记录。
 
-### 方式一：手动保存
-
-在 `Stop()` 之后调用 `SaveSummaryToRedis`：
-
-```go
-mon.Stop()
-err := mon.SaveSummaryToRedis(redisClient, "resource:summary:myapp")
-```
-
-### 方式二：自动保存（Stop 时触发）
-
-通过 `SaveToRedis` 便捷方法，在 `Stop()` 时自动保存：
+### 初始化时设置（推荐）
 
 ```go
 saver := monitor.NewRedisSummarySaver(redisClient)
-mon.SaveToRedis(saver, "resource:summary:myapp")
 
-mon.Start()
-// ... 业务逻辑 ...
-mon.Stop() // 自动保存汇总到 Redis
-```
-
-或通过 Config 初始化时设置：
-
-```go
-saver := monitor.NewRedisSummarySaver(redisClient)
 mon, _ := monitor.NewResourceMonitor(&monitor.Config{
-    GetSummarySaver: func() (monitor.SummarySaver, string) {
-        return saver, "resource:summary:myapp"
-    },
+    Interval:    5 * time.Second,
+    LogInterval: 10 * time.Second,
+    Saver:       saver,
+    SaveKey:     "resource:summary:myapp",
 })
+mon.Start()
+
+// ... 业务逻辑 ...
+
+mon.Stop() // 自动输出汇总 + 保存到 Redis
+```
+
+### 运行中动态设置
+
+```go
+mon.SetSaver(saver, "resource:summary:myapp")
 ```
 
 ## 保存到 Redis 的 JSON 结构
@@ -107,17 +96,67 @@ mon, _ := monitor.NewResourceMonitor(&monitor.Config{
 | `goroutine_max` | int | Goroutine 最大数量 |
 | `goroutine_avg` | int | Goroutine 平均数量 |
 
+## 资源分析
+
+从 Redis 读取历史汇总记录，按 CPU 核心数分组后聚合分析，输出格式化报告。
+
+### 从 Redis 分析
+
+```go
+results, report, err := monitor.AnalyzeFromRedis(redisClient, "resource:summary:myapp", nil)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(report)
+```
+
+### 带时间过滤
+
+```go
+since, _ := time.Parse(time.RFC3339, "2026-02-01T00:00:00+08:00")
+results, report, err := monitor.AnalyzeFromRedis(redisClient, key, &monitor.AnalyzeOptions{
+    Since: since,
+})
+```
+
+### 直接分析记录切片（不依赖 Redis）
+
+```go
+results, report := monitor.AnalyzeRecords(records, nil)
+```
+
+`AnalyzeResult` 结构体包含聚合后的指标：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `NumCPU` | int | CPU 核心数 |
+| `RecordCount` | int | 记录条数 |
+| `TotalSamples` | int | 总采样次数 |
+| `CPUMin / CPUMax / CPUAvg` | float64 | CPU 使用率（加权） |
+| `MemoryMin / MemoryMax / MemoryAvg` | uint64 | 常驻内存（字节，加权） |
+| `GoroutineMin / GoroutineMax / GoroutineAvg` | int | Goroutine 数量（加权） |
+
+## 文件结构
+
+| 文件 | 职责 |
+|------|------|
+| `types.go` | 所有结构体、接口定义 |
+| `resource.go` | 监控器生命周期、采集、汇总 |
+| `redis_saver.go` | Redis 持久化实现 |
+| `analyze.go` | 历史记录聚合分析 |
+| `format.go` | 格式化工具（FormatBytes、报告排版） |
+
 ## 主要 API
 
 | 方法 | 说明 |
 |------|------|
 | `NewResourceMonitor(cfg)` | 创建监控器，cfg 可为 nil |
-| `Start()` | 启动异步采样 |
-| `Stop()` | 停止采样并输出汇总 |
+| `Start()` | 启动异步采样（清空上轮历史） |
+| `Stop()` | 停止采样、输出汇总、可选持久化 |
 | `GetStats()` | 获取当前资源快照 |
 | `GetSummary()` | 获取已采集数据的汇总 |
-| `SaveSummaryToRedis(client, key)` | 手动保存汇总到 Redis List |
-| `SaveToRedis(saver, key)` | 设置自动保存（Stop 时触发） |
-| `SetSummarySaver(getter)` | 设置自定义持久化回调 |
+| `SetSaver(saver, key)` | 设置或更新持久化方式 |
 | `NewRedisSummarySaver(client)` | 创建 Redis SummarySaver 实例 |
+| `AnalyzeFromRedis(client, key, opts)` | 从 Redis 读取并聚合分析 |
+| `AnalyzeRecords(records, opts)` | 直接分析记录切片 |
 | `FormatBytes(bytes)` | 字节数格式化（B/KB/MB/GB） |

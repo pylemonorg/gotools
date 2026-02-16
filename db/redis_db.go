@@ -435,6 +435,11 @@ func (rc *RedisClient) LLen(key string) (int64, error) {
 	return rc.client.LLen(rc.ctx, key).Result()
 }
 
+// LRange 返回列表中指定范围的元素。start 和 stop 为 0-based 索引，支持负数（-1 表示最后一个）。
+func (rc *RedisClient) LRange(key string, start, stop int64) ([]string, error) {
+	return rc.client.LRange(rc.ctx, key, start, stop).Result()
+}
+
 // ---------------------------------------------------------------------------
 // 其他操作
 // ---------------------------------------------------------------------------
