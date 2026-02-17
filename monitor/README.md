@@ -14,10 +14,9 @@ if err != nil {
     log.Fatal(err)
 }
 mon.Start()
+defer mon.Stop() // 停止并打印汇总
 
 // ... 业务逻辑 ...
-
-mon.Stop() // 停止并打印汇总
 ```
 
 ## 自定义配置
@@ -48,10 +47,9 @@ mon, _ := monitor.NewResourceMonitor(&monitor.Config{
     SaveKey:     "resource:summary:myapp",
 })
 mon.Start()
+defer mon.Stop() // 自动输出汇总 + 保存到 Redis
 
 // ... 业务逻辑 ...
-
-mon.Stop() // 自动输出汇总 + 保存到 Redis
 ```
 
 ### 运行中动态设置
