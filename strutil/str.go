@@ -27,3 +27,17 @@ func Base64Decode(input string) (string, error) {
 	}
 	return string(decoded), nil
 }
+
+// Base64RawURLEncode 使用 RawURLEncoding 对字符串进行 Base64 编码（无填充、URL 安全）。
+func Base64RawURLEncode(input string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(input))
+}
+
+// Base64RawURLDecode 对 RawURLEncoding 编码的 Base64 字符串进行解码。
+func Base64RawURLDecode(input string) (string, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(input)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}

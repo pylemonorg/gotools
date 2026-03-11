@@ -16,6 +16,20 @@ func TestBase64(t *testing.T) {
 	}
 }
 
+func TestBase64RawURL(t *testing.T) {
+	input := "https://www.baidu.com/s?wd=go&ie=utf-8"
+	encoded := Base64RawURLEncode(input)
+	t.Logf("Base64RawURLEncode: %s", encoded)
+
+	decoded, err := Base64RawURLDecode(encoded)
+	if err != nil {
+		t.Fatalf("Base64RawURLDecode: %v", err)
+	}
+	if decoded != input {
+		t.Errorf("Base64RawURLDecode = %q, want %q", decoded, input)
+	}
+}
+
 func TestStrip(t *testing.T) {
 	tests := []struct {
 		input string
