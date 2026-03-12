@@ -18,6 +18,7 @@ go get github.com/pylemonorg/gotools@latest
 | **monitor** | `gotools/monitor` | 进程资源监控（CPU/内存/Goroutine），支持定时采样、汇总统计、持久化 |
 | **jsonutil** | `gotools/jsonutil` | JSON 序列化/反序列化、文件读写、类型安全取值 |
 | **hashutil** | `gotools/hashutil` | MD5、SHA-256、xxhash 分桶、随机字符串 |
+| **htmlutil** | `gotools/htmlutil` | HTML 编码检测与解码，支持标准检测和 chardet 增强检测 |
 | **strutil** | `gotools/strutil` | 字符串处理（Strip）、Base64 编解码 |
 | **urlutil** | `gotools/urlutil` | 相对 URL 解析为绝对 URL、URL 哈希 |
 | **timeutil** | `gotools/timeutil` | 耗时格式化、函数计时、最小运行时间保障 |
@@ -56,6 +57,23 @@ func DoWork() {
     defer timeutil.TrackTime("DoWork")()
     // ...
 }
+```
+
+### HTML 编码检测
+
+```go
+import "github.com/pylemonorg/gotools/htmlutil"
+
+// 标准模式：通过 Content-Type 和 meta 标签检测编码
+result := htmlutil.Decode(body, resp.Header.Get("Content-Type"))
+fmt.Println(result.Text, result.Encoding, result.Certain)
+
+// 增强模式：标准检测不确定时，自动使用 chardet 统计分析
+result := htmlutil.DecodeSmart(body, resp.Header.Get("Content-Type"))
+fmt.Println(result.Text, result.Encoding, result.Certain)
+
+// 流式读取：自动转换为 UTF-8
+reader, err := htmlutil.NewReader(resp.Body, resp.Header.Get("Content-Type"))
 ```
 
 ## 版本管理
